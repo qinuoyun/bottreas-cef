@@ -64,9 +64,10 @@ PRUNE_DIRS="third_party/blink/web_tests chrome/test/data content/test/data"
 export PATH="$WORK/depot_tools:$PATH"
 if $IS_WINDOWS; then
   # Use the Visual Studio on the runner, not Google's internal toolchain package.
-  export DEPOT_TOOLS_WIN_TOOLCHAIN=0 GYP_MSVS_VERSION=2022
+  # Chromium 156 is built with Visual Studio 2026 (vs_toolchain.py), the one on the image.
+  export DEPOT_TOOLS_WIN_TOOLCHAIN=0 GYP_MSVS_VERSION=2026
   vs="$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath 2>/dev/null | tr -d '\r' || true)"
-  if [[ -n "$vs" ]]; then export vs2022_install="$vs" GYP_MSVS_OVERRIDE_PATH="$vs"; fi
+  if [[ -n "$vs" ]]; then export vs2026_install="$vs" GYP_MSVS_OVERRIDE_PATH="$vs"; fi
 fi
 
 output() {
@@ -114,7 +115,6 @@ prepare() {
   if $IS_WINDOWS; then
     free_disk_windows
     use_roomiest_drive
-    check_windows_sdk
   else
     # Spotlight would index the tens of GB the build writes.
     sudo mdutil -a -i off > /dev/null 2>&1 || true
@@ -157,19 +157,31 @@ use_roomiest_drive() {
   fi
 }
 
-# Chromium needs the "Debugging Tools for Windows" of the Windows SDK
-# (dbghelp.dll), which is an optional SDK feature.
-check_windows_sdk() {
-  local kits="/c/Program Files (x86)/Windows Kits/10"
+# Chromium asks for one Windows SDK version (SDK_VERSION in
+# build/vs_toolchain.py), with its "Debugging Tools for Windows". The image may
+# have another one, so the one Chromium names is installed when it is missing.
+# Installers by version, from https://learn.microsoft.com/windows/apps/windows-sdk/downloads
+ensure_windows_sdk() {
+  $IS_WINDOWS || return 0
+  local kits="/c/Program Files (x86)/Windows Kits/10" version url
+  version="$(sed -n "s/^SDK_VERSION = '\(.*\)'/\1/p" "$SRC/build/vs_toolchain.py" | tr -d '\r')"
   ls "$kits/Include" || true
-  if [[ -f "$kits/Debuggers/x64/dbghelp.dll" ]]; then
-    echo "Debugging Tools for Windows: present"
+  if [[ -d "$kits/Include/$version/um" && -f "$kits/Debuggers/x64/dbghelp.dll" ]]; then
+    echo "Windows SDK $version and its Debugging Tools: present"
     return
   fi
-  echo "::warning::Debugging Tools for Windows are missing; installing them"
-  curl -fsSL -o "$RUNNER_TEMP/winsdksetup.exe" "https://go.microsoft.com/fwlink/?linkid=2272610"
-  "$RUNNER_TEMP/winsdksetup.exe" //features OptionId.WindowsDesktopDebuggers //quiet //norestart
-  [[ -f "$kits/Debuggers/x64/dbghelp.dll" ]] || fail "Could not install the Debugging Tools for Windows."
+  case "$version" in
+    10.0.28000.0) url="https://go.microsoft.com/fwlink/?linkid=2382519" ;; # 10.0.28000.2957
+    10.0.26100.0) url="https://go.microsoft.com/fwlink/?linkid=2382321" ;; # 10.0.26100.9457
+    *) fail "Chromium wants Windows SDK $version; add its installer to ensure_windows_sdk." ;;
+  esac
+  echo "Installing Windows SDK $version from $url"
+  curl -fsSL -o "$RUNNER_TEMP/winsdksetup.exe" "$url"
+  # Every feature: the C++ headers and libraries, the tools and the debuggers.
+  "$RUNNER_TEMP/winsdksetup.exe" //features + //quiet //norestart //ceip off
+  ls "$kits/Include"
+  [[ -d "$kits/Include/$version/um" ]] || fail "Windows SDK $version did not install."
+  [[ -f "$kits/Debuggers/x64/dbghelp.dll" ]] || fail "The Debugging Tools for Windows did not install."
 }
 
 # Keeps one Xcode, always at $XCODE_APP: compile commands contain the SDK
@@ -231,6 +243,8 @@ fetch() {
   local actual
   actual="$($PY "$SRC/cef/tools/cef_version.py" current | tr -d '\r')"
   [[ "$actual" == "$CEF_VERSION" ]] || fail "The checkout is CEF $actual, not $CEF_VERSION."
+
+  ensure_windows_sdk
 
   # What automate-git.py does before it builds: translate CEF's API files,
   # apply CEF's patches to Chromium, write args.gn and run gn gen. Only the
@@ -356,6 +370,7 @@ restore() {
     rm "$part"
   done | zstd -d -q --long=27 | tar_cmd -C "$(dirname "$WORK")" -xf -
   [[ -d "$OUT" ]] || fail "The unpacked tree has no $OUT."
+  ensure_windows_sdk
   echo "Disk: $(disk)"
 }
 
