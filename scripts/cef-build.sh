@@ -43,7 +43,8 @@ IS_WINDOWS=false
 if [[ "$PLATFORM" == windows64 ]]; then IS_WINDOWS=true; fi
 
 # The same path in every job: the build files refer to it. On Windows a short
-# path on the roomiest drive keeps clear of the 260-character path limit.
+# path keeps clear of the 260-character path limit, and prepare puts it on the
+# drive with the most room (CEF_WORK, through GITHUB_ENV).
 if $IS_WINDOWS; then WORK="${CEF_WORK:-/c/cef}"; else WORK="$HOME/cef"; fi
 SRC="$WORK/chromium/src"
 OUT="$SRC/out/$OUT_CONFIG"
@@ -111,6 +112,8 @@ gn_defines() {
 prepare() {
   echo "Disk: $(disk)"
   if $IS_WINDOWS; then
+    free_disk_windows
+    use_roomiest_drive
     check_windows_sdk
   else
     # Spotlight would index the tens of GB the build writes.
@@ -119,6 +122,39 @@ prepare() {
     free_disk_mac
   fi
   echo "Disk: $(disk)"
+}
+
+# Toolsets of the Windows image that Chromium does not need: tens of GB on C:.
+# Best effort; a failure here only costs space.
+free_disk_windows() {
+  local tool
+  df -h /c /d 2> /dev/null || true
+  rm -rf /c/Android "/c/Program Files (x86)/Android" /c/ghcup /c/Strawberry /c/rtools* \
+    "/c/Program Files/dotnet" "/c/Program Files/MongoDB" "/c/Program Files/PostgreSQL" \
+    /c/msys64 /c/Miniconda /c/tools/php* 2> /dev/null || true
+  for tool in "${RUNNER_TOOL_CACHE:-/c/hostedtoolcache/windows}"/*; do
+    if [[ "$(basename "$tool")" != Python ]]; then rm -rf "$tool" 2> /dev/null || true; fi
+  done
+  df -h /c /d 2> /dev/null || true
+}
+
+# The checkout, temporary files and vpython's environments go on the drive
+# with the most free space: C: alone ran out while Chromium's hooks unpacked
+# their Python packages into C:\Windows\Temp.
+use_roomiest_drive() {
+  local drive=c
+  if [[ -d /d ]] && (( $(df -k /d | awk 'NR == 2 { print $4 }') > $(df -k /c | awk 'NR == 2 { print $4 }') )); then drive=d; fi
+  WORK="/$drive/cef"
+  mkdir -p "/$drive/tmp" "/$drive/vpython"
+  echo "Working on ${drive^^}: ($(df -h "/$drive" | awk 'NR == 2 { print $4 }') free)"
+  if [[ -n "${GITHUB_ENV:-}" ]]; then
+    {
+      echo "CEF_WORK=$WORK"
+      echo "TEMP=${drive^^}:\\tmp"
+      echo "TMP=${drive^^}:\\tmp"
+      echo "VPYTHON_VIRTUALENV_ROOT=${drive^^}:\\vpython"
+    } >> "$GITHUB_ENV"
+  fi
 }
 
 # Chromium needs the "Debugging Tools for Windows" of the Windows SDK
