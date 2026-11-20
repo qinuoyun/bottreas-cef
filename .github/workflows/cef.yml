@@ -1,0 +1,117 @@
+name: CEF with codecs
+run-name: CEF ${{ inputs.cef_version }} with codecs (${{ inputs.platforms }})
+
+# Builds CEF from source with the proprietary codecs (H.264, AAC, HEVC) that
+# the official builds leave out on purpose
+# (https://github.com/chromiumembedded/cef/issues/3559), for macOS arm64,
+# macOS x64 and Windows x64, and publishes the "minimal" binary distributions
+# with their SHA-256 as the release cef-<version>-codecs (cef-156.0.31-codecs).
+# The file names are the official ones, so a consumer that knows the official
+# archive name only swaps the download URL.
+#
+# Started by hand: Actions > CEF with codecs > Run workflow. Each platform
+# runs as its own chain of jobs (cef-platform.yml); they run side by side.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cef_version:
+        description: CEF version, as in the official archive name
+        default: "156.0.31+ge603d97+chromium-156.0.8078.100"
+      platforms:
+        description: Platforms to build, comma-separated (macosarm64, macosx64, windows64)
+        default: "macosarm64,macosx64,windows64"
+      cef_branch:
+        description: CEF branch; empty = the Chromium build number in the version (8078)
+        default: ""
+      cef_commit:
+        description: CEF commit; empty = the hash in the version (e603d97)
+        default: ""
+      gn_defines:
+        description: GN args added to, and overriding, the defaults in scripts/cef-build.sh
+        default: ""
+      pgo:
+        description: Optimize with Chromium's PGO profiles, as official builds do
+        type: boolean
+        default: true
+
+# The build jobs run Chromium's toolchains and hooks for hours, so they only
+# read the repository and delete this run's artifacts; only the publish job
+# writes the release.
+permissions:
+  contents: read
+  actions: write # deleting the intermediate artifacts
+
+concurrency:
+  group: cef-codecs
+  cancel-in-progress: false
+
+jobs:
+  macosarm64:
+    if: contains(inputs.platforms, 'macosarm64')
+    uses: ./.github/workflows/cef-platform.yml
+    with:
+      platform: macosarm64
+      runner: macos-26
+      cef_version: ${{ inputs.cef_version }}
+      cef_branch: ${{ inputs.cef_branch }}
+      cef_commit: ${{ inputs.cef_commit }}
+      gn_defines: ${{ inputs.gn_defines }}
+      pgo: ${{ inputs.pgo }}
+
+  # Cross-compiled on Apple silicon, as CEF's own macOS x64 builds are.
+  macosx64:
+    if: contains(inputs.platforms, 'macosx64')
+    uses: ./.github/workflows/cef-platform.yml
+    with:
+      platform: macosx64
+      runner: macos-26
+      cef_version: ${{ inputs.cef_version }}
+      cef_branch: ${{ inputs.cef_branch }}
+      cef_commit: ${{ inputs.cef_commit }}
+      gn_defines: ${{ inputs.gn_defines }}
+      pgo: ${{ inputs.pgo }}
+
+  windows64:
+    if: contains(inputs.platforms, 'windows64')
+    uses: ./.github/workflows/cef-platform.yml
+    with:
+      platform: windows64
+      runner: windows-2025
+      cef_version: ${{ inputs.cef_version }}
+      cef_branch: ${{ inputs.cef_branch }}
+      cef_commit: ${{ inputs.cef_commit }}
+      gn_defines: ${{ inputs.gn_defines }}
+      pgo: ${{ inputs.pgo }}
+
+  publish:
+    name: Publish the release
+    needs: [macosarm64, macosx64, windows64]
+    # Runs when every requested platform finished; a skipped platform was not requested.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && contains(needs.*.result, 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the release
+      actions: write # deleting the intermediate artifacts
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PLATFORM: macosarm64 # only for the script's settings; publish takes every platform
+      CEF_VERSION: ${{ inputs.cef_version }}
+      GN_DEFINES_EXTRA: ${{ inputs.gn_defines }}
+      CEF_PGO: ${{ inputs.pgo }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cef-distrib-*
+          path: ${{ runner.temp }}/cef-distrib
+
+      - name: Create or update the release
+        run: scripts/cef-build.sh publish
+
+      - name: Delete the remaining build trees
+        run: scripts/cef-build.sh drop-artifacts cef-state-
