@@ -362,16 +362,40 @@ save() {
 
 # Unpacks what save packed. Each part is deleted once it has been read.
 restore() {
-  local part
+  local part rc=0 errors
+  errors=$(mktemp)
   (cd "$STATE_DIR" && sha256 -c SHA256SUMS)
   mkdir -p "$(dirname "$WORK")"
   for part in "$STATE_DIR"/cef.tar.zst.part-*; do
     cat "$part"
     rm "$part"
-  done | zstd -d -q --long=27 | tar_cmd -C "$(dirname "$WORK")" -xf -
+  done | zstd -d -q --long=27 | tar_cmd -C "$(dirname "$WORK")" -xf - 2> "$errors" || rc=$?
+  cat "$errors" >&2
+  if (( rc != 0 )); then relink "$errors" || fail "tar failed (exit $rc)."; fi
   [[ -d "$OUT" ]] || fail "The unpacked tree has no $OUT."
   ensure_windows_sdk
   echo "Disk: $(disk)"
+}
+
+# Git Bash's tar makes a symlink by copying its target (MSYS emulates links),
+# so a link whose target comes later in the archive fails and tar exits 2
+# after unpacking everything else. Makes those links again now that the whole
+# tree is there. Fails when tar reported anything else.
+relink() {
+  local line link target pattern="^tar: (.+): Cannot create symlink to '(.+)': No such file or directory$"
+  if grep -Ev "Cannot create symlink to|Exiting with failure status" "$1" | grep -q .; then return 1; fi
+  while IFS= read -r line; do
+    [[ $line =~ $pattern ]] || continue
+    link="$(dirname "$WORK")/${BASH_REMATCH[1]}"
+    target=${BASH_REMATCH[2]}
+    rm -rf "$link"
+    (
+      cd "$(dirname "$link")"
+      if MSYS=winsymlinks:nativestrict ln -s "$target" "$(basename "$link")" 2> /dev/null; then exit 0; fi
+      if [[ -e $target ]]; then cp -r "$target" "$(basename "$link")"; exit 0; fi
+      echo "Skipped ${BASH_REMATCH[1]}: its target $target is not in the tree either."
+    )
+  done < "$1"
 }
 
 # Creates the release (or adds to it) with every distribution in DIST_DIR and
