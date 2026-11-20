@@ -366,19 +366,35 @@ drop_artifacts() {
 # of that log goes into an error annotation: annotations can be read without
 # signing in to GitHub, the job logs cannot.
 run_stage() {
-  local log="${RUNNER_TEMP:-/tmp}/cef-stage.log" rc=0
+  local log="${RUNNER_TEMP:-/tmp}/cef-stage.log" rc
   : > "$log"
-  ( "$@" ) > >(tee -a "$log") 2>&1 || rc=$?
+  # Not "( ... ) || rc=$?": in that position bash ignores set -e inside the
+  # subshell, and a failed command would not stop the stage.
+  set +e
+  ( set -e; "$@" ) > >(tee -a "$log") 2>&1
+  rc=$?
+  set -e
   sleep 1 # lets tee write the last lines
-  if (( rc != 0 )); then
-    local tail
-    tail="$(tail -n 80 "$log" | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{ printf "%s%%0A", $0 }')"
-    echo "::error title=cef-build.sh $1 failed (exit $rc)::$tail"
-    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-      { echo "### cef-build.sh $1 failed (exit $rc)"; echo '```'; tail -n 200 "$log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-    fi
-  fi
+  if (( rc != 0 )); then annotate_failure "$1" "$rc" "$log"; fi
   return "$rc"
+}
+
+# An annotation shows only about 4 KB, and a step keeps at most 10 of them:
+# first the lines that look like errors, then the end of the log in pieces.
+annotate_failure() {
+  local stage="$1" rc="$2" log="$3" chunks="${RUNNER_TEMP:-/tmp}/cef-annotations" file
+  rm -rf "$chunks"
+  mkdir -p "$chunks"
+  grep -aiE 'error|fatal|failed|traceback|exception|denied|not found|no such|timed out|cannot|could not' "$log" |
+    grep -avE '^\s*$' | tail -n 40 | cut -c1-300 > "$chunks/0-errors" || true
+  tail -n 120 "$log" | cut -c1-300 | split -b 3500 - "$chunks/1-tail-"
+  for file in $(ls "$chunks" | tail -n 9); do
+    [[ -s "$chunks/$file" ]] || continue
+    echo "::error title=cef-build.sh $stage failed (exit $rc), $file::$(sed -e 's/%/%25/g' -e 's/\r//g' "$chunks/$file" | awk '{ printf "%s%%0A", $0 }')"
+  done
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    { echo "### cef-build.sh $stage failed (exit $rc)"; echo '```'; tail -n 200 "$log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+  fi
 }
 
 case "${1:-}" in
