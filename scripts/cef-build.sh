@@ -362,14 +362,33 @@ drop_artifacts() {
     done
 }
 
+# Runs one stage with its output also in a log. When the stage fails, the end
+# of that log goes into an error annotation: annotations can be read without
+# signing in to GitHub, the job logs cannot.
+run_stage() {
+  local log="${RUNNER_TEMP:-/tmp}/cef-stage.log" rc=0
+  : > "$log"
+  ( "$@" ) > >(tee -a "$log") 2>&1 || rc=$?
+  sleep 1 # lets tee write the last lines
+  if (( rc != 0 )); then
+    local tail
+    tail="$(tail -n 80 "$log" | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{ printf "%s%%0A", $0 }')"
+    echo "::error title=cef-build.sh $1 failed (exit $rc)::$tail"
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+      { echo "### cef-build.sh $1 failed (exit $rc)"; echo '```'; tail -n 200 "$log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+    fi
+  fi
+  return "$rc"
+}
+
 case "${1:-}" in
-  prepare) prepare ;;
-  fetch) fetch ;;
-  restore) restore ;;
-  build) build ;;
-  distrib) distrib ;;
-  save) save ;;
-  publish) publish ;;
+  prepare) run_stage prepare ;;
+  fetch) run_stage fetch ;;
+  restore) run_stage restore ;;
+  build) run_stage build ;;
+  distrib) run_stage distrib ;;
+  save) run_stage save ;;
+  publish) run_stage publish ;;
   drop-artifacts) drop_artifacts "${2:-}" ;;
   *)
     echo "usage: $0 prepare|fetch|restore|build|distrib|save|publish|drop-artifacts <prefix>" >&2

@@ -1,5 +1,5 @@
 name: CEF with codecs
-run-name: CEF ${{ inputs.cef_version }} with codecs (${{ inputs.platforms }})
+run-name: CEF ${{ inputs.cef_version || '156.0.31+ge603d97+chromium-156.0.8078.100' }} with codecs (${{ inputs.platforms || 'windows64' }})
 
 # Builds CEF from source with the proprietary codecs (H.264, AAC, HEVC) that
 # the official builds leave out on purpose
@@ -11,8 +11,13 @@ run-name: CEF ${{ inputs.cef_version }} with codecs (${{ inputs.platforms }})
 #
 # Started by hand: Actions > CEF with codecs > Run workflow. Each platform
 # runs as its own chain of jobs (cef-platform.yml); they run side by side.
+# While the Windows build is being brought up, a push that changes the build
+# scripts also builds windows64 with the default inputs.
 
 on:
+  push:
+    branches: [main]
+    paths: [scripts/**, .github/workflows/**]
   workflow_dispatch:
     inputs:
       cef_version:
@@ -42,47 +47,48 @@ permissions:
   contents: read
   actions: write # deleting the intermediate artifacts
 
+# One run per set of platforms: a Windows retry must not wait for a macOS build.
 concurrency:
-  group: cef-codecs
+  group: cef-codecs-${{ inputs.platforms || 'windows64' }}
   cancel-in-progress: false
 
 jobs:
   macosarm64:
-    if: contains(inputs.platforms, 'macosarm64')
+    if: contains(inputs.platforms || 'windows64', 'macosarm64')
     uses: ./.github/workflows/cef-platform.yml
     with:
       platform: macosarm64
       runner: macos-26
-      cef_version: ${{ inputs.cef_version }}
+      cef_version: ${{ inputs.cef_version || '156.0.31+ge603d97+chromium-156.0.8078.100' }}
       cef_branch: ${{ inputs.cef_branch }}
       cef_commit: ${{ inputs.cef_commit }}
       gn_defines: ${{ inputs.gn_defines }}
-      pgo: ${{ inputs.pgo }}
+      pgo: ${{ github.event_name == 'push' || inputs.pgo }}
 
   # Cross-compiled on Apple silicon, as CEF's own macOS x64 builds are.
   macosx64:
-    if: contains(inputs.platforms, 'macosx64')
+    if: contains(inputs.platforms || 'windows64', 'macosx64')
     uses: ./.github/workflows/cef-platform.yml
     with:
       platform: macosx64
       runner: macos-26
-      cef_version: ${{ inputs.cef_version }}
+      cef_version: ${{ inputs.cef_version || '156.0.31+ge603d97+chromium-156.0.8078.100' }}
       cef_branch: ${{ inputs.cef_branch }}
       cef_commit: ${{ inputs.cef_commit }}
       gn_defines: ${{ inputs.gn_defines }}
-      pgo: ${{ inputs.pgo }}
+      pgo: ${{ github.event_name == 'push' || inputs.pgo }}
 
   windows64:
-    if: contains(inputs.platforms, 'windows64')
+    if: contains(inputs.platforms || 'windows64', 'windows64')
     uses: ./.github/workflows/cef-platform.yml
     with:
       platform: windows64
       runner: windows-2025
-      cef_version: ${{ inputs.cef_version }}
+      cef_version: ${{ inputs.cef_version || '156.0.31+ge603d97+chromium-156.0.8078.100' }}
       cef_branch: ${{ inputs.cef_branch }}
       cef_commit: ${{ inputs.cef_commit }}
       gn_defines: ${{ inputs.gn_defines }}
-      pgo: ${{ inputs.pgo }}
+      pgo: ${{ github.event_name == 'push' || inputs.pgo }}
 
   publish:
     name: Publish the release
@@ -97,9 +103,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       PLATFORM: macosarm64 # only for the script's settings; publish takes every platform
-      CEF_VERSION: ${{ inputs.cef_version }}
+      CEF_VERSION: ${{ inputs.cef_version || '156.0.31+ge603d97+chromium-156.0.8078.100' }}
       GN_DEFINES_EXTRA: ${{ inputs.gn_defines }}
-      CEF_PGO: ${{ inputs.pgo }}
+      CEF_PGO: ${{ github.event_name == 'push' || inputs.pgo }}
     steps:
       - uses: actions/checkout@v4
         with:
