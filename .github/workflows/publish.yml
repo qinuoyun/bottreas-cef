@@ -1,0 +1,59 @@
+name: Publish CEF with codecs
+# Publishes the distributions a "CEF with codecs" run made, as soon as that run
+# ends, whatever happened to its other platforms: a platform that fails no
+# longer holds back the ones that finished, and a platform rebuilt in a later
+# run adds itself to the same release. Uploads replace assets of the same name.
+# Started by hand with a run id, it publishes that run again.
+
+on:
+  workflow_run:
+    workflows: [CEF with codecs]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: The id of the "CEF with codecs" run to publish
+        required: true
+
+permissions:
+  contents: write # the release
+  actions: write # reading the run's artifacts, deleting its build trees
+
+jobs:
+  publish:
+    name: Publish the release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+      PLATFORM: macosarm64 # only for the script's settings; publish takes every platform
+      CEF_VERSION: "156.0.31+ge603d97+chromium-156.0.8078.100"
+      CEF_PGO: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Look for distributions
+        id: find
+        run: |
+          count=$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN_ID/artifacts" --jq '[.artifacts[] | select(.name | startswith("cef-distrib-")) | select(.expired | not)] | length')
+          echo "Run $SOURCE_RUN_ID has $count distributions."
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        if: steps.find.outputs.count != '0'
+        with:
+          pattern: cef-distrib-*
+          path: ${{ runner.temp }}/cef-distrib
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Create or update the release
+        if: steps.find.outputs.count != '0'
+        run: scripts/cef-build.sh publish
+
+      - name: Delete the run's remaining build trees
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'failure'
+        run: scripts/cef-build.sh drop-artifacts cef-state-

@@ -411,7 +411,7 @@ publish() {
 
 GN_DEFINES: $(gn_defines)
 
-Built by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+Built by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/${SOURCE_RUN_ID:-$GITHUB_RUN_ID}"
   if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
     gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
   else
@@ -429,7 +429,7 @@ Built by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 # Deletes this workflow run's artifacts whose name starts with $1.
 drop_artifacts() {
   local prefix="${1:?usage: cef-build.sh drop-artifacts <name prefix>}" id
-  gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+  gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/${SOURCE_RUN_ID:-$GITHUB_RUN_ID}/artifacts" \
     --jq ".artifacts[] | select(.name | startswith(\"$prefix\")) | .id" |
     while read -r id; do
       gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
