@@ -22,6 +22,11 @@ on:
       cef_commit: { type: string, default: "" }
       gn_defines: { type: string, default: "" }
       pgo: { type: boolean, default: true }
+      # Instead of fetching, the first job unpacks the build tree
+      # cef-state-<platform>-<resume_part> of the run resume_run, which a
+      # failed job left (the trees are kept for seven days).
+      resume_run: { type: string, default: "" }
+      resume_part: { type: string, default: "" }
 
 defaults:
   run:
@@ -84,7 +89,21 @@ jobs:
         run: scripts/cef-build.sh prepare
 
       - name: Fetch CEF and Chromium, patch and configure
+        if: inputs.resume_run == ''
         run: scripts/cef-build.sh fetch
+
+      - name: Download the build tree to carry on from
+        if: inputs.resume_run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: cef-state-${{ inputs.platform }}-${{ inputs.resume_part }}
+          path: ${{ runner.temp }}/cef-state
+          run-id: ${{ inputs.resume_run }}
+          github-token: ${{ github.token }}
+
+      - name: Unpack it
+        if: inputs.resume_run != ''
+        run: scripts/cef-build.sh restore
 
       - &build
         name: Build

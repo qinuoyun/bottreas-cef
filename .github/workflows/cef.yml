@@ -35,6 +35,12 @@ on:
         description: Optimize with Chromium's PGO profiles, as official builds do
         type: boolean
         default: true
+      resume_run:
+        description: Carry on from a build tree another run left (its run id); empty = fetch
+        default: ""
+      resume_part:
+        description: The number of that tree's job, as in its artifact cef-state-<platform>-<part>
+        default: ""
 
 # The build jobs run Chromium's toolchains and hooks for hours, so they only
 # read the repository and delete this run's artifacts; only the publish job
@@ -60,6 +66,8 @@ jobs:
       cef_commit: ${{ inputs.cef_commit }}
       gn_defines: ${{ inputs.gn_defines }}
       pgo: ${{ inputs.pgo }}
+      resume_run: ${{ inputs.resume_run }}
+      resume_part: ${{ inputs.resume_part }}
 
   # Cross-compiled on Apple silicon, as CEF's own macOS x64 builds are.
   macosx64:
@@ -73,6 +81,8 @@ jobs:
       cef_commit: ${{ inputs.cef_commit }}
       gn_defines: ${{ inputs.gn_defines }}
       pgo: ${{ inputs.pgo }}
+      resume_run: ${{ inputs.resume_run }}
+      resume_part: ${{ inputs.resume_part }}
 
   windows64:
     if: contains(inputs.platforms, 'windows64')
@@ -85,3 +95,5 @@ jobs:
       cef_commit: ${{ inputs.cef_commit }}
       gn_defines: ${{ inputs.gn_defines }}
       pgo: ${{ inputs.pgo }}
+      resume_run: ${{ inputs.resume_run }}
+      resume_part: ${{ inputs.resume_part }}

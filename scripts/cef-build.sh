@@ -302,7 +302,11 @@ build() {
 
   # Ninja is resumable by design: when it is stopped, the next job's ninja
   # redoes only the unfinished steps. A watchdog stops it when the time is up.
-  NINJA_STATUS="[%p %f/%t %e] " "$NINJA" -C "$OUT" -j "$(cpus)" cefclient &
+  # make_distrib.py also packs bootstrap.exe and bootstrapc.exe on Windows,
+  # which cefclient does not need; automate-git.py adds them the same way.
+  local targets=(cefclient)
+  if [[ $PLATFORM == windows64 ]]; then targets+=(bootstrap bootstrapc); fi
+  NINJA_STATUS="[%p %f/%t %e] " "$NINJA" -C "$OUT" -j "$(cpus)" "${targets[@]}" &
   ninja_pid=$!
   (
     sleep "$budget"
